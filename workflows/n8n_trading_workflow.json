@@ -1,0 +1,371 @@
+{
+  "name": "Trading Bot Analysis Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9,15 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        250,
+        300
+      ],
+      "notes": "Runs at 9 AM and 3 PM, Monday-Friday (market hours)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://trading-bot-api:5000/analyze",
+        "authentication": "none",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "ticker",
+              "value": "={{ $json.ticker || 'AAPL' }}"
+            },
+            {
+              "name": "start_date",
+              "value": "={{ $today.minus({ days: 90 }).toFormat('yyyy-MM-dd') }}"
+            },
+            {
+              "name": "end_date",
+              "value": "={{ $today.toFormat('yyyy-MM-dd') }}"
+            },
+            {
+              "name": "data_provider",
+              "value": "yahoo"
+            },
+            {
+              "name": "enable_breakout_filter",
+              "value": true
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "analyze-stock",
+      "name": "Analyze Stock",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        470,
+        300
+      ],
+      "notes": "Calls trading bot API to analyze stock"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ],
+          "number": [
+            {
+              "value1": "={{ $json.total_signals }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "check-signals",
+      "name": "Check for Signals",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        690,
+        300
+      ],
+      "notes": "Only proceed if analysis succeeded and found signals"
+    },
+    {
+      "parameters": {
+        "operation": "formatDate",
+        "date": "={{ $now }}",
+        "format": "custom",
+        "customFormat": "yyyy-MM-dd HH:mm:ss",
+        "options": {}
+      },
+      "id": "format-timestamp",
+      "name": "Format Timestamp",
+      "type": "n8n-nodes-base.dateTime",
+      "typeVersion": 2,
+      "position": [
+        910,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and format signals for notification\nconst data = $input.first().json;\n\nconst signals = data.signals || [];\nconst ticker = data.ticker;\nconst timestamp = data.timestamp;\n\n// Format signal summary\nlet message = `📊 Trading Analysis: ${ticker}\\n`;\nmessage += `⏰ Time: ${timestamp}\\n`;\nmessage += `📈 Total Signals: ${data.total_signals}\\n\\n`;\n\nif (signals.length > 0) {\n  message += '🎯 Recent Signals:\\n';\n  \n  signals.forEach((signal, index) => {\n    const emoji = signal.Signal === 'BUY' ? '🟢' : '🔴';\n    const type = signal.Breakout_Candle ? '⚡ Breakout' : '📍 Regular';\n    \n    message += `\\n${emoji} ${signal.Signal} - ${signal.Date}\\n`;\n    message += `   Type: ${type}\\n`;\n    message += `   Close: $${signal.Close?.toFixed(2)}\\n`;\n    message += `   Strength: ${signal.Signal_Strength || 'N/A'}\\n`;\n  });\n}\n\nreturn {\n  json: {\n    ticker: ticker,\n    message: message,\n    signals_count: data.total_signals,\n    buy_signals: signals.filter(s => s.Signal === 'BUY').length,\n    sell_signals: signals.filter(s => s.Signal === 'SELL').length,\n    raw_data: data\n  }\n};"
+      },
+      "id": "process-signals",
+      "name": "Process Signals",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        910,
+        300
+      ],
+      "notes": "Format trading signals for notification"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
+        "authentication": "none",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.message }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "send-slack",
+      "name": "Send to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1130,
+        200
+      ],
+      "notes": "Send trading signals to Slack (configure webhook URL)"
+    },
+    {
+      "parameters": {
+        "subject": "Trading Signal Alert - {{ $json.ticker }}",
+        "emailType": "text",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1130,
+        300
+      ],
+      "notes": "Email trading signals (configure email credentials in n8n)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://trading-bot-api:5000/export",
+        "authentication": "none",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "ticker",
+              "value": "={{ $json.ticker }}"
+            },
+            {
+              "name": "format",
+              "value": "csv"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "export-signals",
+      "name": "Export to CSV",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1130,
+        400
+      ],
+      "notes": "Export signals to CSV file"
+    },
+    {
+      "parameters": {
+        "content": "=No trading signals found for {{ $json.ticker }} at this time.",
+        "options": {}
+      },
+      "id": "no-signals",
+      "name": "No Signals",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        910,
+        450
+      ],
+      "notes": "Workflow ends here if no signals detected"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://trading-bot-api:5000/analyze",
+        "authentication": "none",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "ticker",
+              "value": "={{ $json.ticker }}"
+            },
+            {
+              "name": "start_date",
+              "value": "={{ $json.start_date }}"
+            },
+            {
+              "name": "end_date",
+              "value": "={{ $json.end_date }}"
+            },
+            {
+              "name": "data_provider",
+              "value": "={{ $json.data_provider || 'yahoo' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "manual-analyze",
+      "name": "Manual Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        470,
+        500
+      ],
+      "notes": "For manual webhook triggers with custom parameters"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trading-webhook",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        250,
+        500
+      ],
+      "webhookId": "trading-bot-webhook",
+      "notes": "Manual trigger via webhook - POST JSON with ticker, dates"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Analyze Stock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Stock": {
+      "main": [
+        [
+          {
+            "node": "Check for Signals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Signals": {
+      "main": [
+        [
+          {
+            "node": "Process Signals",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Signals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Signals": {
+      "main": [
+        [
+          {
+            "node": "Format Timestamp",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send to Slack",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Export to CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Manual Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Analysis": {
+      "main": [
+        [
+          {
+            "node": "Check for Signals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-12-09T00:00:00.000Z",
+  "versionId": "1"
+}

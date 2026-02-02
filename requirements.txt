@@ -1,0 +1,25 @@
+# Trading Bot Requirements
+# Install with: pip install -r requirements.txt
+
+# Core dependencies
+pandas>=1.5.0,<2.0.0
+numpy>=1.21.0,<2.0.0
+yfinance>=0.2.0
+ta>=0.10.0
+
+# API integrations
+ib_insync>=0.9.86
+alpaca-py>=0.13.0
+
+# Web API for n8n integration
+flask>=2.3.0
+requests>=2.28.0
+
+# Discord integration
+discord.py>=2.0.0
+
+# WebSocket for real-time data
+websocket-client>=1.6.0
+
+# Development and testing
+pytest>=7.0.0
