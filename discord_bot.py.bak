@@ -1,0 +1,453 @@
+"""
+Discord Bot Commands
+====================
+Discord bot with commands to run trading analysis and send signals.
+
+Commands:
+  !analyze all          - Run full multi-asset analysis
+  !analyze TSLA         - Analyze specific ticker
+  !analyze BTC          - Works with tickers
+  !status               - Show bot status
+  !help                 - Show available commands
+  !schedule             - Show scheduled run times
+
+Usage:
+  python discord_bot.py
+"""
+
+import discord
+from discord.ext import commands
+import asyncio
+import sys
+import os
+
+# Add project paths
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config'))
+
+from config.config import Config
+from src.multi_timeframe_analyzer import MultiTimeframeAnalyzer
+from datetime import datetime
+import pytz
+
+# Bot setup
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+
+# Global config
+config = Config()
+
+# Ticker mapping for aliases
+TICKER_MAP = {
+    'tsla': 'TSLA',
+    'tesla': 'TSLA',
+    'btc': 'BTC-USD',
+    'bitcoin': 'BTC-USD',
+    'aapl': 'AAPL',
+    'apple': 'AAPL',
+    'eth': 'ETH-USD',
+    'ethereum': 'ETH-USD',
+    'sp500': '^GSPC',
+    'sp': '^GSPC',
+    'xrp': 'XRP-USD',
+    'ripple': 'XRP-USD',
+    'nvda': 'NVDA',
+    'nvidia': 'NVDA',
+    'gld': 'GLD',
+    'gold': 'GLD',
+    'slv': 'SLV',
+    'silver': 'SLV',
+}
+
+# Timeframe emojis
+TIMEFRAME_EMOJIS = {
+    '1m': '⚡',
+    '5m': '📊',
+    '15m': '📈',
+    '1h': '🕐',
+}
+
+
+class AnalysisResult:
+    """Holds analysis results."""
+    def __init__(self):
+        self.signals = {}
+        self.total_signals = 0
+
+
+async def run_single_ticker_analysis(ticker: str, analyzer: MultiTimeframeAnalyzer) -> AnalysisResult:
+    """Run analysis for a single ticker."""
+    result = AnalysisResult()
+    
+    print(f"  📊 Analyzing {ticker}...")
+    
+    # Analyze ticker across all timeframes
+    for timeframe in config.TIMEFRAMES:
+        signal_data = await analyzer.analyze_ticker_timeframe(ticker, timeframe)
+        
+        if signal_data:
+            if timeframe not in result.signals:
+                result.signals[timeframe] = []
+            
+            result.signals[timeframe].append(signal_data)
+            result.total_signals += 1
+            
+            # Send signal to Discord
+            await analyzer.process_signal(signal_data)
+    
+    return result
+
+
+@bot.event
+async def on_ready():
+    """Bot is ready."""
+    print(f"\n✅ Bot connected as {bot.user}")
+    print(f"   Prefix: !")
+    print(f"   Watching for commands...\n")
+
+
+@bot.command(name='analyze', help='Analyze ticker(s): !analyze TSLA or !analyze all')
+async def analyze(ctx, *, ticker: str = None):
+    """Run analysis on specific ticker or all tickers."""
+    
+    if not ticker:
+        embed = discord.Embed(
+            title="❌ Missing Argument",
+            description="Usage: `!analyze TSLA` or `!analyze all`",
+            color=discord.Color.red()
+        )
+        embed.add_field(name="Available Tickers", value=", ".join(config.PRIMARY_TICKERS), inline=False)
+        await ctx.send(embed=embed)
+        return
+    
+    # Note: Commands work in any channel (removed channel name restriction)
+    
+    ticker = ticker.upper().strip()
+    
+    # Handle "all" command
+    if ticker == 'ALL':
+        tickers_to_analyze = config.PRIMARY_TICKERS
+        analysis_type = "Full Market"
+    else:
+        # Try to map ticker alias
+        ticker_key = ticker.lower()
+        if ticker_key in TICKER_MAP:
+            ticker = TICKER_MAP[ticker_key]
+        
+        # Validate ticker
+        if ticker not in config.PRIMARY_TICKERS:
+            embed = discord.Embed(
+                title="❌ Invalid Ticker",
+                description=f"`{ticker}` is not in the watchlist",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="Available Tickers", value=", ".join(config.PRIMARY_TICKERS), inline=False)
+            await ctx.send(embed=embed)
+            return
+        
+        tickers_to_analyze = [ticker]
+        analysis_type = f"{config.get_ticker_display_name(ticker)}"
+    
+    # Send initial response
+    embed = discord.Embed(
+        title=f"🔄 Running Analysis",
+        description=f"Analyzing {analysis_type}...",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="Tickers", value=", ".join(tickers_to_analyze), inline=False)
+    embed.add_field(name="Timeframes", value=", ".join(config.TIMEFRAMES), inline=False)
+    status_message = await ctx.send(embed=embed)
+    
+    try:
+        # Run analysis
+        analyzer = MultiTimeframeAnalyzer(config)
+        
+        total_signals = 0
+        results_by_tf = {tf: [] for tf in config.TIMEFRAMES}
+        
+        print(f"\n[Discord Command] Analyzing: {', '.join(tickers_to_analyze)}")
+        
+        for ticker_to_analyze in tickers_to_analyze:
+            for timeframe in config.TIMEFRAMES:
+                signal_data = await analyzer.analyze_ticker_timeframe(ticker_to_analyze, timeframe)
+                
+                if signal_data:
+                    results_by_tf[timeframe].append(signal_data)
+                    total_signals += 1
+                    
+                    # Send signal to Discord
+                    await analyzer.process_signal(signal_data)
+        
+        # Create summary embed
+        summary_embed = discord.Embed(
+            title=f"✅ Analysis Complete",
+            description=f"Analyzed {len(tickers_to_analyze)} ticker(s) across {len(config.TIMEFRAMES)} timeframes",
+            color=discord.Color.green()
+        )
+        
+        summary_embed.add_field(
+            name="📈 Total Signals",
+            value=f"**{total_signals}** signals generated",
+            inline=False
+        )
+        
+        # Add breakdown by timeframe
+        breakdown = ""
+        for tf in config.TIMEFRAMES:
+            emoji = TIMEFRAME_EMOJIS.get(tf, '⏱️')
+            count = len(results_by_tf[tf])
+            breakdown += f"{emoji} **{tf.upper()}**: {count} signals\n"
+        
+        summary_embed.add_field(name="By Timeframe", value=breakdown or "No signals", inline=False)
+        summary_embed.add_field(name="Posted To", value="Signals sent to their respective timeframe channels", inline=False)
+        summary_embed.set_footer(text=f"Analysis completed at {datetime.now().strftime('%H:%M:%S')}")
+        
+        # Update status message
+        await status_message.edit(embed=summary_embed)
+        
+        print(f"✅ Analysis complete: {total_signals} signals\n")
+        
+    except Exception as e:
+        print(f"❌ Error during analysis: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        error_embed = discord.Embed(
+            title="❌ Analysis Failed",
+            description=f"Error: {str(e)}",
+            color=discord.Color.red()
+        )
+        try:
+            await status_message.edit(embed=error_embed)
+        except:
+            await ctx.send(embed=error_embed)
+
+
+@bot.command(name='status', help='Show bot status')
+async def status(ctx):
+    """Show bot status and configuration."""
+    tz = pytz.timezone('US/Eastern')
+    current_time = datetime.now(tz)
+    
+    embed = discord.Embed(
+        title="🤖 Trading Bot Status",
+        description="Live and monitoring markets",
+        color=discord.Color.green()
+    )
+    
+    embed.add_field(
+        name="📊 Assets Monitored",
+        value="\n".join([f"• {config.get_ticker_display_name(t)}" for t in config.PRIMARY_TICKERS]),
+        inline=True
+    )
+    
+    embed.add_field(
+        name="⏱️ Timeframes",
+        value=", ".join(config.TIMEFRAMES),
+        inline=True
+    )
+    
+    embed.add_field(
+        name="📅 Scheduled Runs",
+        value="9:00 AM EST (Weekdays)",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🕐 Current Time",
+        value=f"{current_time.strftime('%Y-%m-%d %H:%M:%S %Z')}",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="💻 System",
+        value=f"Data Provider: {config.DATA_PROVIDER}\nDebug Mode: {config.DEBUG}",
+        inline=False
+    )
+    
+    embed.set_footer(text="Use !help for available commands")
+    
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='schedule', help='Show scheduled run times')
+async def schedule(ctx):
+    """Show when the bot runs automatically."""
+    embed = discord.Embed(
+        title="📅 Trading Bot Schedule",
+        description="Automatic market analysis schedule",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(
+        name="🕘 Run Time",
+        value="9:00 AM EST",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="📆 Days",
+        value="Monday - Friday",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🎯 Analysis",
+        value="All 7 assets on 5 timeframes",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📢 Output",
+        value="Signals posted to timeframe channels",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="💡 Manual Runs",
+        value="Use `!analyze TICKER` for on-demand analysis",
+        inline=False
+    )
+    
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='tickers', help='Show monitored assets')
+async def tickers(ctx):
+    """Show all monitored tickers."""
+    embed = discord.Embed(
+        title="📊 Monitored Assets",
+        color=discord.Color.blue()
+    )
+    
+    ticker_list = ""
+    for ticker in config.PRIMARY_TICKERS:
+        display_name = config.get_ticker_display_name(ticker)
+        ticker_list += f"{display_name} (`{ticker}`)\n"
+    
+    embed.add_field(name="Assets", value=ticker_list, inline=False)
+    
+    embed.add_field(
+        name="Quick Commands",
+        value="`!analyze TSLA`\n`!analyze all`\n`!analyze NVDA`",
+        inline=False
+    )
+    
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='commands', help='Show available commands')
+async def commands_command(ctx):
+    """Show available bot commands."""
+    embed = discord.Embed(
+        title="🤖 Trading Bot Commands",
+        description="Available commands and usage",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(
+        name="!analyze <ticker>",
+        value="Analyze specific asset\nUsage: `!analyze TSLA`",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="!analyze all",
+        value="Run full market analysis on all 7 assets",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="!status",
+        value="Show bot status and configuration",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="!tickers",
+        value="List all monitored assets",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="!schedule",
+        value="Show scheduled run times (9 AM EST weekdays)",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📋 Ticker Aliases",
+        value="Supports: TSLA, TESLA, BTC, BITCOIN, AAPL, APPLE, ETH, ETHEREUM, XRP, RIPPLE, NVDA, NVIDIA, SP500",
+        inline=False
+    )
+    
+    embed.set_footer(text="Use !analyze <ticker> to run analysis on demand")
+    
+    await ctx.send(embed=embed)
+
+
+@bot.event
+async def on_command_error(ctx, error):
+    """Handle command errors."""
+    if isinstance(error, commands.CommandNotFound):
+        embed = discord.Embed(
+            title="❌ Command Not Found",
+            description=f"Unknown command. Use `!commands` for available commands.",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+    elif isinstance(error, commands.MissingRequiredArgument):
+        embed = discord.Embed(
+            title="❌ Missing Arguments",
+            description=f"Use `!commands` for command syntax",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+    else:
+        print(f"Command error: {error}")
+        await ctx.send(f"❌ Error: {str(error)}")
+
+
+def main():
+    """Main entry point."""
+    # Validate config
+    is_valid, message = Config.validate()
+    print(f"\n{message}")
+    
+    if not is_valid:
+        print("\n❌ Configuration invalid")
+        return 1
+    
+    # Show config
+    Config.print_config()
+    
+    # Get token
+    token = config.DISCORD_BOT_TOKEN
+    if not token:
+        print("❌ DISCORD_BOT_TOKEN not set in .env")
+        return 1
+    
+    print("\n" + "="*80)
+    print("🤖 DISCORD BOT COMMANDS")
+    print("="*80)
+    print("\nAvailable Commands:")
+    print("  !analyze <ticker>    - Analyze specific asset (e.g., !analyze TSLA)")
+    print("  !analyze all         - Full market analysis")
+    print("  !status              - Show bot status")
+    print("  !tickers             - List monitored assets")
+    print("  !schedule            - Show run schedule")
+    print("  !commands            - Show all commands")
+    print("\n" + "="*80 + "\n")
+    
+    # Start bot
+    try:
+        bot.run(token)
+    except Exception as e:
+        print(f"❌ Error starting bot: {e}")
+        return 1
+
+
+if __name__ == "__main__":
+    exit(main())

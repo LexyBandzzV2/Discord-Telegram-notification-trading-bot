@@ -62,32 +62,41 @@ def detect_market_structure(df: pd.DataFrame, idx: int, lookback: int = 20) -> d
     
     This is simplified - for production, you'd use ML pattern recognition.
     """
-    if idx < lookback:
-        return {'pattern': None, 'confidence': 0}
+    if idx < lookback or len(df) < lookback + 5:
+        return {'pattern': None, 'confidence': 0, 'high_volatility': False, 'near_resistance': False, 'near_support': False, 'price_range': 0}
     
-    recent_highs = df['High'].iloc[idx-lookback:idx+1]
-    recent_lows = df['Low'].iloc[idx-lookback:idx+1]
-    
-    # Simple volatility and trend detection
-    high_volatility = recent_highs.std() > recent_highs.mean() * 0.02
-    price_range = recent_highs.max() - recent_lows.min()
-    
-    # Detect if we're near a significant high/low (potential shoulder area)
-    current_high = df['High'].iloc[idx]
-    current_low = df['Low'].iloc[idx]
-    
-    near_resistance = current_high >= recent_highs.quantile(0.90)
-    near_support = current_low <= recent_lows.quantile(0.10)
-    
-    structure = {
-        'high_volatility': high_volatility,
-        'near_resistance': near_resistance,
-        'near_support': near_support,
-        'price_range': price_range,
-        'pattern': 'consolidation' if not high_volatility else 'volatile'
-    }
-    
-    return structure
+    try:
+        recent_highs = df['High'].iloc[idx-lookback:idx+1]
+        recent_lows = df['Low'].iloc[idx-lookback:idx+1]
+        
+        # Check if we have valid data
+        if len(recent_highs) < 5 or recent_highs.isna().all() or recent_lows.isna().all():
+            return {'pattern': None, 'confidence': 0, 'high_volatility': False, 'near_resistance': False, 'near_support': False, 'price_range': 0}
+        
+        # Simple volatility and trend detection
+        high_volatility = recent_highs.std() > recent_highs.mean() * 0.02
+        price_range = recent_highs.max() - recent_lows.min()
+        
+        # Detect if we're near a significant high/low (potential shoulder area)
+        current_high = df['High'].iloc[idx]
+        current_low = df['Low'].iloc[idx]
+        
+        # Use max/min percentiles instead of quantile for small datasets
+        near_resistance = current_high >= recent_highs.max() * 0.90
+        near_support = current_low <= recent_lows.min() * 0.10
+        
+        structure = {
+            'high_volatility': high_volatility,
+            'near_resistance': near_resistance,
+            'near_support': near_support,
+            'price_range': price_range,
+            'pattern': 'consolidation' if not high_volatility else 'volatile'
+        }
+        
+        return structure
+    except Exception:
+        # Return safe defaults if calculation fails
+        return {'pattern': None, 'confidence': 0, 'high_volatility': False, 'near_resistance': False, 'near_support': False, 'price_range': 0}
 
 
 def generate_signals(df: pd.DataFrame, enable_breakout_filter: bool = True) -> pd.DataFrame:
@@ -311,12 +320,18 @@ def generate_signals(df: pd.DataFrame, enable_breakout_filter: bool = True) -> p
     df['NEAR_SUPPORT'] = False
     df['HIGH_VOLATILITY'] = False
     
-    for idx in range(20, len(df)):
-        structure = detect_market_structure(df, idx, lookback=20)
-        df.at[idx, 'STRUCTURE_PATTERN'] = structure['pattern']
-        df.at[idx, 'NEAR_RESISTANCE'] = structure['near_resistance']
-        df.at[idx, 'NEAR_SUPPORT'] = structure['near_support']
-        df.at[idx, 'HIGH_VOLATILITY'] = structure['high_volatility']
+    # Only run market structure analysis if we have enough data (minimum 30 bars)
+    if len(df) >= 30:
+        for idx in range(20, len(df)):
+            try:
+                structure = detect_market_structure(df, idx, lookback=20)
+                df.at[idx, 'STRUCTURE_PATTERN'] = structure['pattern']
+                df.at[idx, 'NEAR_RESISTANCE'] = structure['near_resistance']
+                df.at[idx, 'NEAR_SUPPORT'] = structure['near_support']
+                df.at[idx, 'HIGH_VOLATILITY'] = structure['high_volatility']
+            except Exception as e:
+                # Skip if market structure detection fails
+                pass
     
     # --- Final Entry Signal (1 = Buy, -1 = Sell, 0 = No Trade) ---
     df['ENTRY_SIGNAL'] = 0

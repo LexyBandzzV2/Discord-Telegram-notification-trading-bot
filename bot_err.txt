@@ -1,0 +1,13 @@
+2026-02-07 20:37:31,872 [discord.client] WARNING: PyNaCl is not installed, voice will NOT be supported
+2026-02-07 20:37:31,873 [llm_wrapper] INFO: LLM wrapper initialized with model: gemini-2.5-flash
+[2026-02-07 20:37:31] [INFO    ] discord.client: logging in using static token
+2026-02-07 20:37:31,877 [discord.client] INFO: logging in using static token
+[2026-02-07 20:37:32] [INFO    ] discord.gateway: Shard ID None has connected to Gateway (Session ID: 4de676cc5d63898342959a8982a36062).
+2026-02-07 20:37:32,572 [discord.gateway] INFO: Shard ID None has connected to Gateway (Session ID: 4de676cc5d63898342959a8982a36062).
+2026-02-07 20:37:34,587 [discord_bot] INFO: Scheduled: Daily News at 8:00am EST
+2026-02-07 20:37:34,589 [discord_bot] INFO: Scheduled: Daily Summary at 8:30am EST
+2026-02-07 20:37:34,590 [discord_bot] INFO: Scheduled: Market Open Analysis at 9:00am EST
+2026-02-07 20:40:26,117 [llm_wrapper] INFO: LLM response received (299 chars)
+2026-02-07 20:40:26,393 [discord_bot] INFO: Strategy generated for BTC-USD
+2026-02-07 20:43:56,135 [llm_wrapper] INFO: LLM response received (292 chars)
+2026-02-07 20:43:56,453 [discord_bot] INFO: Strategy generated for ETH-USD
